@@ -6,6 +6,14 @@ The format is based on Keep a Changelog, and this project aims to follow Semanti
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-29
+
+### Added
+
+- README: Pipeline Middleware section covering global and handler-specific
+  pipelines.
+- Project URLs (homepage, repository, issues, changelog) in package metadata.
+
 ## [0.2.0] - 2026-10-28
 
 ### Added
