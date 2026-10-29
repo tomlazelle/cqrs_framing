@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 
 from cqrs_framing import (
+    AsyncHandler,
     AsyncHandlerContext,
     Broker,
     CommandResponse,
@@ -25,7 +26,7 @@ class ProcessPayment(Message):
 
 
 # Handler
-class ProcessPaymentHandler:
+class ProcessPaymentHandler(AsyncHandler[ProcessPayment, CommandResponse[str]]):
     """Handler for processing payments."""
 
     async def execute(
@@ -104,19 +105,21 @@ async def main():
     """Run the example."""
     print("=== Pipeline Middleware Example ===\n")
 
-    # Setup
+    # Global pipeline: runs for every request handled by the broker
+    global_pipeline = Pipeline[AsyncHandlerContext]()
+    global_pipeline.use(logging_middleware)
+    global_pipeline.use(timing_middleware)
+    global_pipeline.use(exception_handling_middleware)
+
+    # Handler pipeline: runs only for ProcessPayment, inside the global one
+    payment_pipeline = Pipeline[AsyncHandlerContext]()
+    payment_pipeline.use(validation_middleware)
+    payment_pipeline.use(transaction_middleware)
+
     registry = HandlerRegistry()
-    registry.register(ProcessPayment, ProcessPaymentHandler)
+    registry.register(ProcessPayment, ProcessPaymentHandler, pipeline=payment_pipeline)
 
-    # Create pipeline
-    pipeline = Pipeline[AsyncHandlerContext]()
-    pipeline.use(logging_middleware)
-    pipeline.use(timing_middleware)
-    pipeline.use(exception_handling_middleware)
-    pipeline.use(validation_middleware)
-    pipeline.use(transaction_middleware)
-
-    broker = Broker(registry, async_pipeline=pipeline)
+    broker = Broker(registry, async_pipeline=global_pipeline)
 
     # Example 1: Valid payment
     print("Example 1: Valid payment\n")
@@ -134,14 +137,13 @@ async def main():
     print(f"\nResult: {result2.message}\n")
     print("-" * 50 + "\n")
 
-    # Example 3: Custom middleware order
-    print("Example 3: Different middleware order\n")
-    minimal_pipeline = Pipeline[AsyncHandlerContext]()
-    minimal_pipeline.use(logging_middleware)
-    minimal_pipeline.use(timing_middleware)
+    # Example 3: Global pipeline only (handler registered without a pipeline)
+    print("Example 3: Global pipeline only\n")
+    plain_registry = HandlerRegistry()
+    plain_registry.register(ProcessPayment, ProcessPaymentHandler)
 
-    minimal_broker = Broker(registry, async_pipeline=minimal_pipeline)
-    result3 = await minimal_broker.handle_async(
+    plain_broker = Broker(plain_registry, async_pipeline=global_pipeline)
+    result3 = await plain_broker.handle_async(
         ProcessPayment(payment_id="PAY-003", amount=49.99)
     )
     print(f"\nResult: {result3.data}\n")

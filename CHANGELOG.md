@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project aims to follow Semantic Versioning.
 
+## [Unreleased]
+
+### Added
+
+- Handler-specific pipelines: `HandlerRegistry.register(..., pipeline=)`,
+  `register_instance(..., pipeline=)` and `@handler(..., pipeline=)`. They run
+  inside the broker's global pipeline (global -> handler -> handler.execute).
+
 ## [0.1.1] - 2026-01-09
 
 ### Added

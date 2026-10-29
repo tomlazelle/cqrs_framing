@@ -9,6 +9,8 @@ from typing import Any
 
 from di_container import DIContainer  # type: ignore[import-untyped]
 
+from .pipeline import Pipeline
+
 
 class HandlerNotRegisteredError(RuntimeError):
     """Raised when no handler is registered for a request type."""
@@ -122,13 +124,20 @@ class HandlerRegistry:
         self._container = container if container is not None else DIContainer()
         self._sync: dict[type[Any], type[Any]] = {}
         self._async: dict[type[Any], type[Any]] = {}
+        self._sync_pipelines: dict[type[Any], Pipeline[Any]] = {}
+        self._async_pipelines: dict[type[Any], Pipeline[Any]] = {}
 
     @property
     def container(self) -> DIContainer:
         """Get the underlying DI container."""
         return self._container
 
-    def register(self, request_type: type[Any], handler_type: type[Any]) -> None:
+    def register(
+        self,
+        request_type: type[Any],
+        handler_type: type[Any],
+        pipeline: Pipeline[Any] | None = None,
+    ) -> None:
         """
         Register a handler type for a request type.
 
@@ -139,6 +148,8 @@ class HandlerRegistry:
             request_type: The type of request this handler processes
             handler_type: The handler class (will be resolved with
                 dependencies)
+            pipeline: Optional middleware pipeline that wraps only this
+                handler. Runs inside the broker's global pipeline.
 
         Raises:
             TypeError: If handler doesn't have an execute method
@@ -163,20 +174,14 @@ class HandlerRegistry:
             self._container.register(handler_type)
 
         # Determine if sync or async
-        if inspect.iscoroutinefunction(execute):
-            if request_type in self._async:
-                raise DuplicateHandlerError(
-                    f"Async handler already registered for " f"{request_type.__name__}"
-                )
-            self._async[request_type] = handler_type
-        else:
-            if request_type in self._sync:
-                raise DuplicateHandlerError(
-                    f"Sync handler already registered for " f"{request_type.__name__}"
-                )
-            self._sync[request_type] = handler_type
+        self._map(request_type, handler_type, execute, pipeline)
 
-    def register_instance(self, request_type: type[Any], handler_instance: Any) -> None:
+    def register_instance(
+        self,
+        request_type: type[Any],
+        handler_instance: Any,
+        pipeline: Pipeline[Any] | None = None,
+    ) -> None:
         """
         Register a pre-instantiated handler instance.
 
@@ -186,6 +191,8 @@ class HandlerRegistry:
         Args:
             request_type: The type of request this handler processes
             handler_instance: The handler instance
+            pipeline: Optional middleware pipeline that wraps only this
+                handler. Runs inside the broker's global pipeline.
 
         Raises:
             TypeError: If handler doesn't have an execute method
@@ -210,18 +217,35 @@ class HandlerRegistry:
         self._container.register_instance(handler_type, handler_instance)
 
         # Map request to handler type
+        self._map(request_type, handler_type, execute, pipeline)
+
+    def _map(
+        self,
+        request_type: type[Any],
+        handler_type: type[Any],
+        execute: Any,
+        pipeline: Pipeline[Any] | None,
+    ) -> None:
+        """Record the request -> handler (and optional pipeline) mapping."""
         if inspect.iscoroutinefunction(execute):
-            if request_type in self._async:
-                raise DuplicateHandlerError(
-                    f"Async handler already registered for " f"{request_type.__name__}"
-                )
-            self._async[request_type] = handler_type
+            handlers, pipelines, kind = self._async, self._async_pipelines, "Async"
         else:
-            if request_type in self._sync:
-                raise DuplicateHandlerError(
-                    f"Sync handler already registered for " f"{request_type.__name__}"
-                )
-            self._sync[request_type] = handler_type
+            handlers, pipelines, kind = self._sync, self._sync_pipelines, "Sync"
+        if request_type in handlers:
+            raise DuplicateHandlerError(
+                f"{kind} handler already registered for {request_type.__name__}"
+            )
+        handlers[request_type] = handler_type
+        if pipeline is not None:
+            pipelines[request_type] = pipeline
+
+    def sync_pipeline_for(self, request_type: type[Any]) -> Pipeline[Any] | None:
+        """Get the handler-specific sync pipeline, or None if there is none."""
+        return self._sync_pipelines.get(request_type)
+
+    def async_pipeline_for(self, request_type: type[Any]) -> Pipeline[Any] | None:
+        """Get the handler-specific async pipeline, or None if there is none."""
+        return self._async_pipelines.get(request_type)
 
     def resolve_sync(self, request_type: type[Any]) -> Any:
         """
