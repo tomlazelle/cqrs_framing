@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from .pipeline import Pipeline
 from .registry import HandlerRegistry
 
 _registry_singleton: HandlerRegistry | None = None
@@ -21,7 +22,9 @@ def set_default_registry(registry: HandlerRegistry) -> None:
     _registry_singleton = registry
 
 
-def handler(request_type: type[Any]) -> Callable[[type[Any]], type[Any]]:
+def handler(
+    request_type: type[Any], pipeline: Pipeline[Any] | None = None
+) -> Callable[[type[Any]], type[Any]]:
     """
     Decorator to register a handler class for a request type.
 
@@ -34,6 +37,7 @@ def handler(request_type: type[Any]) -> Callable[[type[Any]], type[Any]]:
 
     Args:
         request_type: The request type this handler processes
+        pipeline: Optional middleware pipeline wrapping only this handler
 
     Returns:
         A decorator function
@@ -48,7 +52,7 @@ def handler(request_type: type[Any]) -> Callable[[type[Any]], type[Any]]:
                 "Default registry not set. Call set_default_registry(...)"
                 " during bootstrap."
             )
-        _registry_singleton.register(request_type, cls)
+        _registry_singleton.register(request_type, cls, pipeline)
         return cls
 
     return decorator

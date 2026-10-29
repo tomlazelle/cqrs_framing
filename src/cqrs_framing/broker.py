@@ -62,9 +62,7 @@ class Broker:
 
         ctx: HandlerContext[Any, Any] = HandlerContext(request=request)
 
-        def terminal(c: HandlerContext[Any, Any]) -> Any:
-            if not c.should_continue:
-                return c.response
+        def invoke_handler(c: HandlerContext[Any, Any]) -> Any:
             handler = self._registry.resolve_sync(type(c.request))
             try:
                 result = handler.execute(c.request)
@@ -77,7 +75,22 @@ class Broker:
                 c.error_message = str(ex)
                 raise
 
-        if self._sync_pipeline is not None:
+        handler_pipeline = self._registry.sync_pipeline_for(type(request))
+
+        async def terminal(c: HandlerContext[Any, Any]) -> Any:
+            if not c.should_continue:
+                return c.response
+            if handler_pipeline is None:
+                return invoke_handler(c)
+
+            async def inner(cc: HandlerContext[Any, Any]) -> Any:
+                if not cc.should_continue:
+                    return cc.response
+                return invoke_handler(cc)
+
+            return await handler_pipeline.run(c, inner)
+
+        if self._sync_pipeline is not None or handler_pipeline is not None:
             import asyncio
 
             try:
@@ -86,18 +99,18 @@ class Broker:
                 pass
             else:
                 raise RuntimeError(
-                    "Broker.handle() cannot execute sync_pipeline "
+                    "Broker.handle() cannot execute a sync pipeline "
                     "while an event loop is running. Use "
                     "Broker.handle_async(...) or call "
                     "Broker.handle(...) from a non-async context."
                 )
 
-            async def terminal_async(c: HandlerContext[Any, Any]) -> Any:
-                return terminal(c)
-
-            result = asyncio.run(self._sync_pipeline.run(ctx, terminal_async))
+            if self._sync_pipeline is not None:
+                result = asyncio.run(self._sync_pipeline.run(ctx, terminal))
+            else:
+                result = asyncio.run(terminal(ctx))
         else:
-            result = terminal(ctx)
+            result = invoke_handler(ctx)
 
         # Domain events: if the handler returned an AggregateRoot,
         # dispatch its events.
@@ -137,9 +150,7 @@ class Broker:
             cancellation_token=cancellation_token,
         )
 
-        async def terminal(c: AsyncHandlerContext[Any, Any]) -> Any:
-            if not c.should_continue:
-                return c.response
+        async def invoke_handler(c: AsyncHandlerContext[Any, Any]) -> Any:
             if c.cancellation_token:
                 c.cancellation_token.throw_if_cancelled()
             handler = self._registry.resolve_async(type(c.request))
@@ -153,6 +164,21 @@ class Broker:
                 c.exception = ex
                 c.error_message = str(ex)
                 raise
+
+        handler_pipeline = self._registry.async_pipeline_for(type(request))
+
+        async def terminal(c: AsyncHandlerContext[Any, Any]) -> Any:
+            if not c.should_continue:
+                return c.response
+            if handler_pipeline is None:
+                return await invoke_handler(c)
+
+            async def inner(cc: AsyncHandlerContext[Any, Any]) -> Any:
+                if not cc.should_continue:
+                    return cc.response
+                return await invoke_handler(cc)
+
+            return await handler_pipeline.run(c, inner)
 
         if self._async_pipeline is not None:
             result = await self._async_pipeline.run(ctx, terminal)
