@@ -242,3 +242,51 @@ def test_unregistered_request_still_raises_with_global_pipeline():
     broker = Broker(HandlerRegistry(), sync_pipeline=Pipeline())
     with pytest.raises(HandlerNotRegisteredError):
         broker.handle(_Req())
+
+
+def _swap_request(calls):
+    async def swap(ctx, next):
+        calls.append("swap")
+        ctx.request = _Other()
+        return await next(ctx)
+
+    return swap
+
+
+@pytest.mark.asyncio
+async def test_async_pipeline_follows_request_replaced_by_global_middleware():
+    calls = []
+
+    class OtherHandler(AsyncHandler[_Other, str]):
+        async def execute(self, message, cancellation_token):
+            calls.append("other_handler")
+            return "other"
+
+    registry = HandlerRegistry()
+    registry.register(_Req, _async_handler(calls))
+    registry.register(
+        _Other, OtherHandler, pipeline=Pipeline().use(_tracer(calls, "other_mw"))
+    )
+    broker = Broker(registry, async_pipeline=Pipeline().use(_swap_request(calls)))
+
+    assert await broker.handle_async(_Req()) == "other"
+    assert calls == ["swap", "other_mw:in", "other_handler", "other_mw:out"]
+
+
+def test_sync_pipeline_follows_request_replaced_by_global_middleware():
+    calls = []
+
+    class OtherHandler(Handler[_Other, str]):
+        def execute(self, message):
+            calls.append("other_handler")
+            return "other"
+
+    registry = HandlerRegistry()
+    registry.register(_Req, _sync_handler(calls))
+    registry.register(
+        _Other, OtherHandler, pipeline=Pipeline().use(_tracer(calls, "other_mw"))
+    )
+    broker = Broker(registry, sync_pipeline=Pipeline().use(_swap_request(calls)))
+
+    assert broker.handle(_Req()) == "other"
+    assert calls == ["swap", "other_mw:in", "other_handler", "other_mw:out"]

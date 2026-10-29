@@ -75,11 +75,12 @@ class Broker:
                 c.error_message = str(ex)
                 raise
 
-        handler_pipeline = self._registry.sync_pipeline_for(type(request))
-
         async def terminal(c: HandlerContext[Any, Any]) -> Any:
             if not c.should_continue:
                 return c.response
+            # Look up by the current request type: global middleware may
+            # have replaced ctx.request.
+            handler_pipeline = self._registry.sync_pipeline_for(type(c.request))
             if handler_pipeline is None:
                 return invoke_handler(c)
 
@@ -90,7 +91,10 @@ class Broker:
 
             return await handler_pipeline.run(c, inner)
 
-        if self._sync_pipeline is not None or handler_pipeline is not None:
+        if (
+            self._sync_pipeline is not None
+            or self._registry.sync_pipeline_for(type(request)) is not None
+        ):
             import asyncio
 
             try:
@@ -165,11 +169,12 @@ class Broker:
                 c.error_message = str(ex)
                 raise
 
-        handler_pipeline = self._registry.async_pipeline_for(type(request))
-
         async def terminal(c: AsyncHandlerContext[Any, Any]) -> Any:
             if not c.should_continue:
                 return c.response
+            # Look up by the current request type: global middleware may
+            # have replaced ctx.request.
+            handler_pipeline = self._registry.async_pipeline_for(type(c.request))
             if handler_pipeline is None:
                 return await invoke_handler(c)
 
