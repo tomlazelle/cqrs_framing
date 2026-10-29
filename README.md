@@ -79,6 +79,57 @@ registry.register(CreateUser, CreateUserHandler)
 result = await broker.handle_async(CreateUser(username="john", email="john@example.com"))
 ```
 
+## Pipeline Middleware
+
+Wrap handler execution with cross-cutting concerns such as logging, validation,
+timing or transactions. Middleware is `async (ctx, next) -> result` and runs in
+the order it was added:
+
+```python
+from cqrs_framing import AsyncHandlerContext, Broker, Pipeline, Response
+
+async def logging_middleware(ctx: AsyncHandlerContext, next):
+    print(f"-> {type(ctx.request).__name__}")
+    result = await next(ctx)
+    print(f"<- success={ctx.success}")
+    return result
+
+async def validation_middleware(ctx: AsyncHandlerContext, next):
+    if isinstance(ctx.request, CreateUser) and not ctx.request.email:
+        # Short-circuit: the handler is never called
+        ctx.should_continue = False
+        ctx.response = Response.failed("Email is required")
+        return ctx.response
+    return await next(ctx)
+
+pipeline = Pipeline[AsyncHandlerContext]()
+pipeline.use(logging_middleware).use(validation_middleware)
+
+broker = Broker(registry, async_pipeline=pipeline)
+```
+
+After the handler runs, the context carries `success`, `exception` and
+`error_message`, so middleware can inspect or react to the outcome.
+
+### Handler-specific pipelines
+
+A pipeline can also be attached to a single handler. It runs inside the
+broker-wide pipeline, so the order is global pipeline, then handler pipeline,
+then `execute`:
+
+```python
+audit_pipeline = Pipeline[AsyncHandlerContext]().use(audit_middleware)
+
+registry.register(CreateUser, CreateUserHandler, pipeline=audit_pipeline)
+
+# or with the decorator
+@handler(CreateUser, pipeline=audit_pipeline)
+class CreateUserHandler(AsyncHandler[CreateUser, CommandResponse[str]]): ...
+```
+
+Use `async_pipeline` for async handlers and `sync_pipeline` for sync handlers
+(see below for the sync caveat).
+
 ## Async and sync semantics
 
 - Prefer `Broker.handle_async(...)` in async applications.
